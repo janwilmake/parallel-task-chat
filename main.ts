@@ -219,6 +219,12 @@ curl --no-buffer -X POST https://taskchat.p0web.com/chat/completions   -H "Conte
         task_spec: { output_schema: { type: "text" } },
         enable_events: true,
         betas: ["events-sse-2025-07-24"],
+
+        // not sure how to add these in the /chat/completion
+        source_policy: undefined,
+        mcp_servers: undefined,
+        metadata: undefined,
+        webhook: undefined,
       });
 
       let lastSourcesConsidered = 0;
