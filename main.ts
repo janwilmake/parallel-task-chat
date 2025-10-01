@@ -287,7 +287,7 @@ curl --no-buffer -X POST https://taskchat.p0web.com/chat/completions   -H "Conte
                     type: event.output.type,
                     basis: event.output.basis,
                     content: event.output.content,
-                    ouptput_schema: (
+                    output_schema: (
                       event.output as Parallel.TaskRun.TaskRunJsonOutput
                     ).output_schema,
                     beta_fields: event.output.beta_fields,
@@ -300,11 +300,8 @@ curl --no-buffer -X POST https://taskchat.p0web.com/chat/completions   -H "Conte
                     warnings: event.run.warnings,
                   };
 
-                  const finalContent = `\`\`\`json\n${JSON.stringify(
-                    resultJson,
-                    null,
-                    2
-                  )}\n\`\`\``;
+                  const safeJsonString = JSON.stringify(resultJson, null, 2);
+                  const finalContent = "```json\n" + safeJsonString + "\n```";
 
                   throttledStream.addToQueue(finalContent, "content", true);
                   throttledStream.complete();
