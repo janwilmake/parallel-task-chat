@@ -12,6 +12,133 @@ interface ChatCompletionRequest {
   };
 }
 
+interface QueueItem {
+  content: string;
+  type: "reasoning" | "content";
+  isLast?: boolean;
+}
+
+function createThrottledStream(
+  requestId: string,
+  model: string,
+  includeUsage: boolean = false
+) {
+  const encoder = new TextEncoder();
+  let queue: QueueItem[] = [];
+  let isProcessing = false;
+  let isComplete = false;
+  let controller: ReadableStreamDefaultController<Uint8Array>;
+
+  const sendChunk = (delta: any, finishReason: string | null = null) => {
+    const chunk = {
+      id: requestId,
+      object: "chat.completion.chunk",
+      created: Math.floor(Date.now() / 1000),
+      model,
+      choices: [{ index: 0, delta, finish_reason: finishReason }],
+    };
+
+    if (finishReason === "stop" && includeUsage) {
+      (chunk as any).usage = {
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        total_tokens: 0,
+      };
+    }
+
+    controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+  };
+
+  const processQueue = async () => {
+    if (isProcessing || queue.length === 0) return;
+
+    isProcessing = true;
+
+    while (queue.length > 0) {
+      const item = queue.shift()!;
+      const content = item.content;
+
+      // Check if this is the last item or if we're complete and should go faster
+      const shouldGoFast = item.isLast || (isComplete && queue.length === 0);
+      const charsPerChunk = shouldGoFast ? content.length : 5;
+      const delay = shouldGoFast ? 10 : 50;
+
+      let position = 0;
+
+      while (position < content.length) {
+        // If there's a new item in queue and we're not on the last item,
+        // send remaining content in one go
+        if (queue.length > 0 && !item.isLast) {
+          const remaining = content.slice(position);
+          if (remaining) {
+            const deltaKey =
+              item.type === "reasoning" ? "reasoning_content" : "content";
+            sendChunk({ [deltaKey]: remaining });
+          }
+          break;
+        }
+
+        const chunk = content.slice(position, position + charsPerChunk);
+        position += charsPerChunk;
+
+        const deltaKey =
+          item.type === "reasoning" ? "reasoning_content" : "content";
+        sendChunk({ [deltaKey]: chunk });
+
+        // Don't delay on the last chunk of the last item
+        if (position < content.length || (!item.isLast && queue.length === 0)) {
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        }
+      }
+    }
+
+    isProcessing = false;
+
+    // If we're complete and queue is empty, send final chunks
+    if (isComplete && queue.length === 0) {
+      sendChunk({}, "stop");
+      controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+      controller.close();
+    }
+  };
+
+  const stream = new ReadableStream({
+    start(ctrl) {
+      controller = ctrl;
+
+      // Send initial role chunk
+      sendChunk({ role: "assistant" });
+    },
+  });
+
+  return {
+    stream,
+    addToQueue: (
+      content: string,
+      type: "reasoning" | "content" = "content",
+      isLast: boolean = false
+    ) => {
+      if (content) {
+        queue.push({ content: content + "\n\n", type, isLast });
+        processQueue();
+      }
+    },
+    complete: () => {
+      isComplete = true;
+      processQueue();
+    },
+    error: (errorMessage: string) => {
+      queue.push({
+        content: `**Error**: ${errorMessage}\n\n`,
+        type: "content",
+        isLast: true,
+      });
+      isComplete = true;
+      processQueue();
+    },
+  };
+}
+
 export default {
   fetch: async (request: Request, env: any) => {
     const url = new URL(request.url);
@@ -94,266 +221,118 @@ curl --no-buffer -X POST https://taskchat.p0web.com/chat/completions   -H "Conte
         betas: ["events-sse-2025-07-24"],
       });
 
-      const encoder = new TextEncoder();
-      const stream = new ReadableStream({
-        async start(controller) {
-          try {
-            // Send initial role chunk
-            controller.enqueue(
-              encoder.encode(
-                `data: ${JSON.stringify({
-                  id: requestId,
-                  object: "chat.completion.chunk",
-                  created: Math.floor(Date.now() / 1000),
-                  model: body.model,
-                  choices: [
-                    {
-                      index: 0,
-                      delta: { role: "assistant" },
-                      finish_reason: null,
-                    },
-                  ],
-                })}\n\n`
-              )
-            );
+      let lastSourcesConsidered = 0;
 
-            // Stream task run events
-            const eventStream = await parallel.beta.taskRun.events(
-              taskRun.run_id
-            );
+      // Create throttled stream
+      const throttledStream = createThrottledStream(
+        requestId,
+        body.model,
+        body.stream_options?.include_usage
+      );
 
-            for await (const event of eventStream) {
-              console.log("Received event:", event);
+      // Process events in the background
+      (async () => {
+        try {
+          const eventStream = await parallel.beta.taskRun.events(
+            taskRun.run_id
+          );
 
-              // Handle different event types based on actual Parallel AI spec
-              switch (event.type) {
-                case "task_run.progress_msg.plan":
-                case "task_run.progress_msg.search":
-                case "task_run.progress_msg.tool_call":
-                case "task_run.progress_msg.exec_status":
-                  // Stream progress messages as reasoning_content
-                  if (event.message) {
-                    controller.enqueue(
-                      encoder.encode(
-                        `data: ${JSON.stringify({
-                          id: requestId,
-                          object: "chat.completion.chunk",
-                          created: Math.floor(Date.now() / 1000),
-                          model: body.model,
-                          choices: [
-                            {
-                              index: 0,
-                              delta: { reasoning_content: event.message },
-                              finish_reason: null,
-                            },
-                          ],
-                        })}\n\n`
-                      )
-                    );
-                  }
-                  break;
+          for await (const event of eventStream) {
+            console.log("Received event:", event);
 
-                case "task_run.progress_stats":
-                  // Handle progress stats if needed
-                  if (event.source_stats) {
-                    const statsMessage = `Processing ${
-                      event.source_stats.num_sources_considered || 0
-                    } sources, read ${
-                      event.source_stats.num_sources_read || 0
-                    }`;
-                    controller.enqueue(
-                      encoder.encode(
-                        `data: ${JSON.stringify({
-                          id: requestId,
-                          object: "chat.completion.chunk",
-                          created: Math.floor(Date.now() / 1000),
-                          model: body.model,
-                          choices: [
-                            {
-                              index: 0,
-                              delta: { reasoning_content: statsMessage },
-                              finish_reason: null,
-                            },
-                          ],
-                        })}\n\n`
-                      )
-                    );
-                  }
-                  break;
+            switch (event.type) {
+              case "task_run.progress_msg.plan":
+              case "task_run.progress_msg.search":
+              case "task_run.progress_msg.tool_call":
+              case "task_run.progress_msg.exec_status":
+                if (event.message) {
+                  throttledStream.addToQueue(event.message, "reasoning");
+                }
+                break;
 
-                case "task_run.state":
-                  // Task run state change
-                  if (
-                    event.run &&
-                    event.run.status === "completed" &&
-                    event.output
-                  ) {
-                    // Format final output as JSON codeblock
-                    const resultJson = {
-                      basis: event.output.basis,
-                      output: event.output.content,
-                      run_info: {
-                        id: event.run.run_id,
-                        status: event.run.status,
-                        created_at: event.run.created_at,
-                        modified_at: event.run.modified_at,
-                      },
-                    };
+              case "task_run.progress_stats":
+                if (
+                  event.source_stats &&
+                  event.source_stats.num_sources_considered >
+                    lastSourcesConsidered
+                ) {
+                  lastSourcesConsidered =
+                    event.source_stats.num_sources_considered;
 
-                    const finalContent = `\`\`\`json\n${JSON.stringify(
-                      resultJson,
-                      null,
-                      2
-                    )}\n\`\`\``;
+                  const statsMessage = `Processing ${
+                    event.source_stats.num_sources_considered || 0
+                  } sources, read ${event.source_stats.num_sources_read || 0}`;
 
-                    // Send final content
-                    controller.enqueue(
-                      encoder.encode(
-                        `data: ${JSON.stringify({
-                          id: requestId,
-                          object: "chat.completion.chunk",
-                          created: Math.floor(Date.now() / 1000),
-                          model: body.model,
-                          choices: [
-                            {
-                              index: 0,
-                              delta: { content: finalContent },
-                              finish_reason: null,
-                            },
-                          ],
-                        })}\n\n`
-                      )
-                    );
+                  throttledStream.addToQueue(statsMessage, "reasoning");
+                }
+                break;
 
-                    // Send final chunk with finish_reason
-                    const finalChunk: any = {
-                      id: requestId,
-                      object: "chat.completion.chunk",
-                      created: Math.floor(Date.now() / 1000),
-                      model: body.model,
-                      choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-                    };
+              case "task_run.state":
+                if (
+                  event.run &&
+                  event.run.status === "completed" &&
+                  event.output
+                ) {
+                  const resultJson = {
+                    type: event.output.type,
+                    basis: event.output.basis,
+                    content: event.output.content,
+                    ouptput_schema: (
+                      event.output as Parallel.TaskRun.TaskRunJsonOutput
+                    ).output_schema,
+                    beta_fields: event.output.beta_fields,
+                    id: event.run.run_id,
+                    status: event.run.status,
+                    created_at: event.run.created_at,
+                    modified_at: event.run.modified_at,
+                    error: event.run.error,
+                    processor: event.run.processor,
+                    warnings: event.run.warnings,
+                  };
 
-                    if (body.stream_options?.include_usage) {
-                      finalChunk.usage = {
-                        prompt_tokens: 0,
-                        completion_tokens: 0,
-                        total_tokens: 0,
-                      };
-                    }
+                  const finalContent = `\`\`\`json\n${JSON.stringify(
+                    resultJson,
+                    null,
+                    2
+                  )}\n\`\`\``;
 
-                    controller.enqueue(
-                      encoder.encode(`data: ${JSON.stringify(finalChunk)}\n\n`)
-                    );
-
-                    controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-                    controller.close();
-                    return;
-                  } else if (
-                    event.run &&
-                    (event.run.status === "failed" ||
-                      event.run.status === "cancelled")
-                  ) {
-                    const errorContent = `**Error**: Task ${
-                      event.run.status
-                    } - ${event.run.error?.message || "Unknown error"}`;
-
-                    controller.enqueue(
-                      encoder.encode(
-                        `data: ${JSON.stringify({
-                          id: requestId,
-                          object: "chat.completion.chunk",
-                          created: Math.floor(Date.now() / 1000),
-                          model: body.model,
-                          choices: [
-                            {
-                              index: 0,
-                              delta: { content: errorContent },
-                              finish_reason: "stop",
-                            },
-                          ],
-                        })}\n\n`
-                      )
-                    );
-
-                    controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-                    controller.close();
-                    return;
-                  }
-                  break;
-
-                case "error":
-                  const errorContent = `**Error**: ${
-                    event.error?.message || "Unknown error"
+                  throttledStream.addToQueue(finalContent, "content", true);
+                  throttledStream.complete();
+                  return;
+                } else if (
+                  event.run &&
+                  (event.run.status === "failed" ||
+                    event.run.status === "cancelled")
+                ) {
+                  const errorContent = `**Error**: Task ${event.run.status} - ${
+                    event.run.error?.message || "Unknown error"
                   }`;
 
-                  controller.enqueue(
-                    encoder.encode(
-                      `data: ${JSON.stringify({
-                        id: requestId,
-                        object: "chat.completion.chunk",
-                        created: Math.floor(Date.now() / 1000),
-                        model: body.model,
-                        choices: [
-                          {
-                            index: 0,
-                            delta: { content: errorContent },
-                            finish_reason: "stop",
-                          },
-                        ],
-                      })}\n\n`
-                    )
-                  );
-
-                  controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-                  controller.close();
+                  throttledStream.addToQueue(errorContent, "content", true);
+                  throttledStream.complete();
                   return;
+                }
+                break;
 
-                default:
-                  console.log("Unhandled event type:", event.type);
-                  break;
-              }
+              case "error":
+                throttledStream.error(event.error?.message || "Unknown error");
+                return;
+
+              default:
+                console.log("Unhandled event type:", event.type);
+                break;
             }
-
-            // Fallback close if we exit the loop without explicit completion
-            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-            controller.close();
-          } catch (error) {
-            console.error("Stream error:", error);
-
-            const errorContent = `**Error**: ${
-              error.message || "Stream processing failed"
-            }`;
-
-            try {
-              controller.enqueue(
-                encoder.encode(
-                  `data: ${JSON.stringify({
-                    id: requestId,
-                    object: "chat.completion.chunk",
-                    created: Math.floor(Date.now() / 1000),
-                    model: body.model,
-                    choices: [
-                      {
-                        index: 0,
-                        delta: { content: errorContent },
-                        finish_reason: "stop",
-                      },
-                    ],
-                  })}\n\n`
-                )
-              );
-              controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-            } catch (e) {
-              console.error("Error sending error message:", e);
-            }
-
-            controller.close();
           }
-        },
-      });
 
-      return new Response(stream, {
+          // Fallback completion
+          throttledStream.complete();
+        } catch (error) {
+          console.error("Stream error:", error);
+          throttledStream.error(error.message || "Stream processing failed");
+        }
+      })();
+
+      return new Response(throttledStream.stream, {
         headers: {
           "Content-Type": "text/event-stream",
           "Cache-Control": "no-cache",
