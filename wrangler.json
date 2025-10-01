@@ -1,0 +1,8 @@
+{
+  "$schema": "https://unpkg.com/wrangler@latest/config-schema.json",
+  "name": "parallel-openai-proxy",
+  "main": "main.ts",
+  "compatibility_date": "2025-10-01",
+  "observability": { "logs": { "enabled": true } },
+  "routes": [{ "custom_domain": true, "pattern": "taskchat.p0web.com" }]
+}
