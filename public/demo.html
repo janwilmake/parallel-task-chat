@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat Interface</title>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        @font-face {
+            font-family: 'FT System Mono';
+            src: url('https://assets.p0web.com/FTSystemMono-Regular.woff2') format('woff2'),
+                url('https://assets.p0web.com/FTSystemMono-Regular.woff') format('woff');
+            font-weight: 400;
+            font-style: normal;
+        }
+
+        @font-face {
+            font-family: 'FT System Mono';
+            src: url('https://assets.p0web.com/FTSystemMono-Medium.woff2') format('woff2'),
+                url('https://assets.p0web.com/FTSystemMono-Medium.woff') format('woff');
+            font-weight: 500;
+            font-style: normal;
+        }
+
+        @font-face {
+            font-family: 'Gerstner Programm';
+            src: url('https://assets.p0web.com/Gerstner-ProgrammRegular.woff2') format('woff2'),
+                url('https://assets.p0web.com/Gerstner-ProgrammRegular.woff') format('woff');
+            font-weight: 400;
+            font-style: normal;
+        }
+
+        :root {
+            --off-white: #fcfcfa;
+            --index-black: #1d1b16;
+            --neural: #d8d0bf;
+            --signal: #fb631b;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'FT System Mono', monospace;
+            background-color: var(--off-white);
+            color: var(--index-black);
+            line-height: 1.5;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            font-family: 'Gerstner Programm', sans-serif;
+            font-size: 2rem;
+            margin-bottom: 2rem;
+            color: var(--index-black);
+        }
+
+        .config-section {
+            background-color: var(--neural);
+            padding: 20px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+            color: var(--index-black);
+        }
+
+        input[type="text"],
+        input[type="password"],
+        textarea,
+        select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid var(--index-black);
+            background-color: var(--off-white);
+            color: var(--index-black);
+            font-family: 'FT System Mono', monospace;
+            font-size: 14px;
+            border-radius: 2px;
+        }
+
+        input[type="text"]:focus,
+        input[type="password"]:focus,
+        textarea:focus,
+        select:focus {
+            outline: none;
+            border-color: var(--signal);
+        }
+
+        textarea {
+            min-height: 100px;
+            resize: vertical;
+        }
+
+        button {
+            background-color: var(--signal);
+            color: var(--off-white);
+            border: none;
+            padding: 12px 24px;
+            font-family: 'FT System Mono', monospace;
+            font-weight: 500;
+            cursor: pointer;
+            border-radius: 2px;
+            transition: opacity 0.2s;
+        }
+
+        button:hover {
+            opacity: 0.8;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .chat-section {
+            background-color: var(--off-white);
+            border: 1px solid var(--neural);
+            padding: 20px;
+            border-radius: 4px;
+            min-height: 300px;
+        }
+
+        .response {
+            background-color: var(--neural);
+            padding: 15px;
+            border-radius: 4px;
+            margin-top: 15px;
+        }
+
+        .response h3 {
+            margin-bottom: 10px;
+            color: var(--index-black);
+        }
+
+        .response-content {
+            font-family: 'FT System Mono', monospace;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+
+        .response-content pre {
+            background-color: var(--index-black);
+            color: var(--off-white);
+            padding: 10px;
+            border-radius: 2px;
+            overflow-x: auto;
+            margin: 10px 0;
+        }
+
+        .response-content code {
+            background-color: var(--index-black);
+            color: var(--off-white);
+            padding: 2px 4px;
+            border-radius: 2px;
+        }
+
+        .response-content pre code {
+            background: none;
+            padding: 0;
+        }
+
+        .error {
+            color: var(--signal);
+            margin-top: 10px;
+        }
+
+        .status {
+            margin-top: 10px;
+            font-style: italic;
+            color: var(--signal);
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>Chat Interface</h1>
+
+        <div class="config-section">
+            <div class="form-group">
+                <label for="apiKey">API Key:</label>
+                <input type="password" id="apiKey" placeholder="Enter your API key">
+            </div>
+
+            <div class="form-group">
+                <label for="model">Model:</label>
+                <input type="text" id="model" value="gpt-4" placeholder="e.g., gpt-4, claude-3-sonnet">
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label for="message">Message:</label>
+            <textarea id="message" placeholder="Enter your message here..."></textarea>
+        </div>
+
+        <button id="sendButton" onclick="sendMessage()">Send Message</button>
+
+        <div class="chat-section">
+            <div id="status"></div>
+            <div id="response-container"></div>
+        </div>
+    </div>
+
+    <script>
+        // Load saved API key and model on page load
+        window.addEventListener('load', () => {
+            const savedApiKey = localStorage.getItem('apiKey');
+            const savedModel = localStorage.getItem('model');
+
+            if (savedApiKey) {
+                document.getElementById('apiKey').value = savedApiKey;
+            }
+            if (savedModel) {
+                document.getElementById('model').value = savedModel;
+            }
+        });
+
+        // Save API key and model when they change
+        document.getElementById('apiKey').addEventListener('change', (e) => {
+            localStorage.setItem('apiKey', e.target.value);
+        });
+
+        document.getElementById('model').addEventListener('change', (e) => {
+            localStorage.setItem('model', e.target.value);
+        });
+
+        async function sendMessage() {
+            const apiKey = document.getElementById('apiKey').value;
+            const model = document.getElementById('model').value;
+            const message = document.getElementById('message').value;
+            const statusEl = document.getElementById('status');
+            const responseContainer = document.getElementById('response-container');
+            const sendButton = document.getElementById('sendButton');
+
+            if (!apiKey || !model || !message) {
+                statusEl.innerHTML = '<div class="error">Please fill in all fields</div>';
+                return;
+            }
+
+            // Save values to localStorage
+            localStorage.setItem('apiKey', apiKey);
+            localStorage.setItem('model', model);
+
+            // Disable button and show status
+            sendButton.disabled = true;
+            statusEl.innerHTML = '<div class="status">Sending message...</div>';
+
+            // Create response container
+            const responseDiv = document.createElement('div');
+            responseDiv.className = 'response';
+            responseDiv.innerHTML = `
+                <h3>Response:</h3>
+                <div class="response-content" id="current-response"></div>
+            `;
+            responseContainer.appendChild(responseDiv);
+
+            const currentResponseEl = document.getElementById('current-response');
+            let fullResponse = '';
+
+            try {
+                const response = await fetch('/chat/completions', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${apiKey}`
+                    },
+                    body: JSON.stringify({
+                        model: model,
+                        messages: [
+                            {
+                                role: 'user',
+                                content: message
+                            }
+                        ],
+                        stream: true
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                statusEl.innerHTML = '<div class="status">Receiving response...</div>';
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+
+                while (true) {
+                    const { done, value } = await reader.read();
+
+                    if (done) break;
+
+                    const chunk = decoder.decode(value);
+                    const lines = chunk.split('\n');
+
+                    for (const line of lines) {
+                        if (line.trim() === '') continue;
+                        if (line.trim() === 'data: [DONE]') continue;
+
+                        if (line.startsWith('data: ')) {
+                            try {
+                                const data = JSON.parse(line.slice(6));
+                                const delta = data.choices?.[0]?.delta;
+
+                                const content = delta?.content || delta?.reasoning_content;
+                                if (content) {
+                                    fullResponse += content;
+                                    currentResponseEl.innerHTML = marked.parse(fullResponse);
+                                }
+                            } catch (e) {
+                                console.error('Error parsing JSON:', e, line);
+                            }
+                        }
+                    }
+                }
+
+                statusEl.innerHTML = '<div class="status">Response complete</div>';
+
+            } catch (error) {
+                console.error('Error:', error);
+                statusEl.innerHTML = `<div class="error">Error: ${error.message}</div>`;
+                currentResponseEl.innerHTML = '<em>Failed to get response</em>';
+            } finally {
+                sendButton.disabled = false;
+            }
+        }
+
+        // Allow sending message with Ctrl+Enter
+        document.getElementById('message').addEventListener('keydown', (e) => {
+            if (e.ctrlKey && e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+    </script>
+</body>
+
+</html>

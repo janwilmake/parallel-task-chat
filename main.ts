@@ -219,8 +219,7 @@ curl --no-buffer -X POST https://taskchat.p0web.com/chat/completions   -H "Conte
         task_spec: { output_schema: { type: "text" } },
         enable_events: true,
         betas: ["events-sse-2025-07-24"],
-
-        // not sure how to add these in the /chat/completion
+        // not sure how to add these in the /chat/completions
         source_policy: undefined,
         mcp_servers: undefined,
         metadata: undefined,
@@ -234,6 +233,11 @@ curl --no-buffer -X POST https://taskchat.p0web.com/chat/completions   -H "Conte
         requestId,
         body.model,
         body.stream_options?.include_usage
+      );
+
+      throttledStream.addToQueue(
+        `I've started a ${body.model} task to answer your question.`,
+        "reasoning"
       );
 
       // Process events in the background
