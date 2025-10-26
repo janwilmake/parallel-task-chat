@@ -119,7 +119,11 @@ function createThrottledStream(
       isLast: boolean = false
     ) => {
       if (content) {
-        queue.push({ content: content + "\n\n", type, isLast });
+        queue.push({
+          content: sanitizeContent(content) + "\n\n",
+          type,
+          isLast,
+        });
         processQueue();
       }
     },
@@ -362,4 +366,17 @@ curl --no-buffer -X POST https://taskchat.p0web.com/chat/completions   -H "Conte
       );
     }
   },
+};
+
+const sanitizeContent = (content: string): string => {
+  if (typeof content !== "string") {
+    return String(content);
+  }
+
+  // Remove or replace problematic characters that might break JSON
+  return content
+    .replace(/[\x00-\x1F\x7F]/g, "") // Remove control characters
+    .replace(/\\/g, "\\\\") // Escape backslashes
+    .replace(/"/g, '\\"') // Escape quotes
+    .trim();
 };
